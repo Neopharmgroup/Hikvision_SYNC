@@ -1,0 +1,33 @@
+{
+  "name": "hikvision-sync",
+  "version": "1.0.0",
+  "description": "Sync Hikvision vehicle data to SQL Server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "node test-connection.js"
+  },
+  "keywords": [
+    "hikvision",
+    "anpr",
+    "sql-server",
+    "sync"
+  ],
+  "author": "Your Name",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "digest-fetch": "^3.1.1",
+    "dotenv": "^16.5.0",
+    "moment-timezone": "^0.6.0",
+    "mssql": "^11.0.1",
+    "node-schedule": "^2.1.1",
+    "winston": "^3.17.0",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.3",
+    "nodemon": "^3.1.10"
+  }
+}
