@@ -34,10 +34,10 @@ async function connectToSQL() {
 }
 
 // Function to get last sync time
-async function getLastSyncTime() {
+async function getLastSyncTime(tableName) {
     try {
         const result = await sqlPool.request()
-            .query('SELECT MAX(CaptureTime) as LastTime FROM VehicleDetection');
+            .query(`SELECT MAX(CaptureTime) as LastTime FROM ${tableName}`);
 
         if (result.recordset[0].LastTime) {
             return result.recordset[0].LastTime;
@@ -48,7 +48,7 @@ async function getLastSyncTime() {
             return today;
         }
     } catch (error) {
-        console.error('Error reading last sync time:', error.message);
+        console.error(`Error reading last sync time from ${tableName}:`, error.message);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         return today;
@@ -56,7 +56,7 @@ async function getLastSyncTime() {
 }
 
 // Function to read data from camera
-async function fetchVehiclesFromCamera(fromTime) {
+async function fetchVehiclesFromCamera(fromTime, cameraConfig) {
     const vehicles = [];
     try {
         // Dynamic import of DigestFetch
@@ -71,16 +71,16 @@ async function fetchVehiclesFromCamera(fromTime) {
     <picTime>${picTime}</picTime>
 </AfterTime>`;
 
-        console.log(`🔍 Searching vehicles from: ${picTime} (Israel time)`);
+        console.log(`🔍 [${cameraConfig.name}] Searching vehicles from: ${picTime} (Israel time)`);
 
         // Digest Auth
         const client = new DigestFetch(
-            process.env.CAMERA_USERNAME,
-            process.env.CAMERA_PASSWORD
+            cameraConfig.username,
+            cameraConfig.password
         );
 
         const res = await client.fetch(
-            `${process.env.CAMERA_URL}/ISAPI/Traffic/channels/1/vehicleDetect/plates`,
+            `${cameraConfig.url}/ISAPI/Traffic/channels/1/vehicleDetect/plates`,
             {
                 method: 'POST',
                 body: requestBody,
@@ -122,16 +122,16 @@ async function fetchVehiclesFromCamera(fromTime) {
             }
         }
 
-        console.log(`✅ Found ${vehicles.length} new vehicles`);
+        console.log(`✅ [${cameraConfig.name}] Found ${vehicles.length} new vehicles`);
     } catch (error) {
-        console.error('❌ Error reading from camera:', error);
+        console.error(`❌ [${cameraConfig.name}] Error reading from camera:`, error);
     }
 
     return vehicles;
 }
 
 // Function to insert data to SQL
-async function insertVehiclesToSQL(vehicles) {
+async function insertVehiclesToSQL(vehicles, tableName, cameraName) {
     if (!vehicles || vehicles.length === 0) {
         return 0;
     }
@@ -143,7 +143,7 @@ async function insertVehiclesToSQL(vehicles) {
             // Check if record already exists
             const checkResult = await sqlPool.request()
                 .input('picName', sql.NVarChar(100), vehicle.picName)
-                .query('SELECT 1 FROM VehicleDetection WHERE PicName = @picName');
+                .query(`SELECT 1 FROM ${tableName} WHERE PicName = @picName`);
 
             if (checkResult.recordset.length === 0) {
                 // Insert new record
@@ -156,47 +156,54 @@ async function insertVehiclesToSQL(vehicles) {
                     .input('insertTime', sql.DateTime2, new Date()) 
 
                     .query(`
-                        INSERT INTO VehicleDetection 
+                        INSERT INTO ${tableName} 
                         (CaptureTime, PlateNumber, PicName, Country, Direction, InsertTime )
                         VALUES (@captureTime, @plateNumber, @picName, @country, @direction, @insertTime)
                     `);
 
                 inserted++;
-                console.log(`   ➕ ${vehicle.plateNumber} - ${vehicle.direction}`);
+                console.log(`   ➕ [${cameraName}] ${vehicle.plateNumber} - ${vehicle.direction}`);
             }
         } catch (error) {
-            console.error(`Error inserting vehicle ${vehicle.plateNumber}:`, error.message);
+            console.error(`[${cameraName}] Error inserting vehicle ${vehicle.plateNumber}:`, error.message);
         }
     }
 
-    console.log(`💾 Saved ${inserted} new records to SQL`);
+    console.log(`💾 [${cameraName}] Saved ${inserted} new records to SQL`);
     return inserted;
 }
 
-// Main sync function
-async function syncVehicles() {
+// Main sync function for a specific camera
+async function syncVehicles(cameraConfig) {
     console.log('\n' + '='.repeat(50));
-    console.log(`🚗 Starting sync - ${new Date().toLocaleString('he-IL')}`);
+    console.log(`🚗 [${cameraConfig.name}] Starting sync - ${new Date().toLocaleString('he-IL')}`);
     console.log('='.repeat(50));
 
     try {
         // Get last sync time
-        const lastSync = await getLastSyncTime();
-        console.log(`⏱️  Last sync time: ${lastSync.toLocaleString('he-IL')}`);
+        const lastSync = await getLastSyncTime(cameraConfig.tableName);
+        console.log(`⏱️  [${cameraConfig.name}] Last sync time: ${lastSync.toLocaleString('he-IL')}`);
 
         // Read new data from camera
-        const vehicles = await fetchVehiclesFromCamera(lastSync);
+        const vehicles = await fetchVehiclesFromCamera(lastSync, cameraConfig);
 
         // Insert to table
         if (vehicles.length > 0) {
-            await insertVehiclesToSQL(vehicles);
+            await insertVehiclesToSQL(vehicles, cameraConfig.tableName, cameraConfig.name);
         } else {
-            console.log('📭 No new vehicles found');
+            console.log(`📭 [${cameraConfig.name}] No new vehicles found`);
         }
 
-        console.log('✅ Sync completed successfully!\n');
+        console.log(`✅ [${cameraConfig.name}] Sync completed successfully!\n`);
     } catch (error) {
-        console.error('❌ Sync error:', error.message);
+        console.error(`❌ [${cameraConfig.name}] Sync error:`, error.message);
+    }
+}
+
+// Sync all cameras
+async function syncAllCameras(cameras) {
+    for (const camera of cameras) {
+        await syncVehicles(camera);
     }
 }
 
@@ -205,19 +212,53 @@ async function main() {
     console.log('🚀 Hikvision Vehicle Sync System');
     console.log('================================\n');
 
+    // Define cameras configuration
+    const cameras = [];
+    
+    // Camera 1
+    if (process.env.CAMERA1_URL) {
+        cameras.push({
+            name: 'Camera1',
+            url: process.env.CAMERA1_URL,
+            username: process.env.CAMERA1_USERNAME,
+            password: process.env.CAMERA1_PASSWORD,
+            tableName: 'VehicleDetection'
+        });
+    }
+    
+    // Camera 2
+    if (process.env.CAMERA2_URL) {
+        cameras.push({
+            name: 'Camera2',
+            url: process.env.CAMERA2_URL,
+            username: process.env.CAMERA2_USERNAME,
+            password: process.env.CAMERA2_PASSWORD,
+            tableName: 'VehicleDetection2'
+        });
+    }
+
+    if (cameras.length === 0) {
+        console.error('❌ No cameras configured! Please set CAMERA1_URL or CAMERA2_URL in .env file');
+        process.exit(1);
+    }
+
+    console.log(`📷 Found ${cameras.length} camera(s) configured:`);
+    cameras.forEach(cam => console.log(`   - ${cam.name}: ${cam.url} -> ${cam.tableName}`));
+    console.log();
+
     // Connect to SQL
     await connectToSQL();
 
-    // Initial sync
-    await syncVehicles();
+    // Initial sync for all cameras
+    await syncAllCameras(cameras);
 
     // Schedule every X minutes
     const intervalMinutes = parseInt(process.env.SYNC_INTERVAL_MINUTES) || 2;
-    console.log(`⏰ Scheduling sync every ${intervalMinutes} minutes`);
+    console.log(`⏰ Scheduling sync every ${intervalMinutes} minutes for all cameras`);
 
     // Set schedule
     const job = schedule.scheduleJob(`*/${intervalMinutes} * * * *`, async () => {
-        await syncVehicles();
+        await syncAllCameras(cameras);
     });
 
     console.log('📡 System is running. Press Ctrl+C to stop\n');
